@@ -13,6 +13,11 @@ const split_chunk = function (input) {
   return input_list;
 };
 
+// To avoid intermediate big array
+function* convert_hashmap_to_array(obj) {
+  for (let key in obj) yield new Map().set(key, obj[key]);
+}
+
 const shuffle = function (post_mapper) {
   post_mapper.sort();
 
@@ -24,7 +29,20 @@ const shuffle = function (post_mapper) {
     acc[cur[0]] = key;
     return acc;
   }, {});
-  return key_values;
+  const key_values_array = Array.from(convert_hashmap_to_array(key_values));
+  return key_values_array;
+};
+
+const partition = function (key_values_array) {
+  const key_len = key_values_array.length;
+  const reducer_size = Math.ceil(key_len / cores);
+  const reducer_tasks = [];
+  for (let i = 0; i < key_len; i += reducer_size) {
+    const upper_bound = Math.min(i + reducer_size, key_len);
+    const batch = key_values_array.slice(i, upper_bound);
+    reducer_tasks.push(batch);
+  }
+  return { reducer_size, reducer_tasks };
 };
 
 const mapreduce_cluster = function (input, map, reduce, callback) {
@@ -33,12 +51,16 @@ const mapreduce_cluster = function (input, map, reduce, callback) {
   if (cluster.isMaster) {
     for (let i = 0; i < cores; i++) {
       var worker = cluster.fork();
-      var finished = 0;
+      var map_count = 0;
+      var reduce_count = 0;
       var post_mapper = [];
+      const task = tasks[worker.id - 1];
+      worker.send({ map_task: task });
 
       worker.on("message", (msg) => {
-        if (msg.signal === "Completed") {
+        if (msg.signal === "MapCompleted") {
           post_mapper = post_mapper.concat(msg.intermediate);
+          map_count++;
         }
       });
 
@@ -47,29 +69,28 @@ const mapreduce_cluster = function (input, map, reduce, callback) {
       });
 
       worker.on("exit", () => {
-        finished++;
-        if (finished == cores) {
+        if (map_count == cores) {
           //  e.g. { 'a': [ 1 ], 'b': [ 1 ], "c": [ 1, 1, 1 ] }
           const key_values = shuffle(post_mapper);
-          const key_len = Object.keys(key_values).length;
-          const reducer_size = Math.ceil(key_len / cores);
-
-          for (const k in key_values) {
-            key_values[k] = reduce(k, key_values[k]);
+          const { reducer_size, reducer_tasks } = partition(key_values);
+          let final = {};
+          for (const reducer_task of reducer_tasks) {
+            reducer_task.forEach((pair) => {
+              const twisted = Array.from(pair)[0];
+              final[twisted[0]] = reduce(twisted[0], twisted[1]);
+            });
           }
 
-          callback(key_values);
+          callback(final);
         }
       });
     }
   } else {
     let task = tasks[cluster.worker.id - 1];
-
     let intermediate = map(task);
-
     process.send({
       from: cluster.worker.id,
-      signal: "Completed",
+      signal: "MapCompleted",
       intermediate,
     });
 

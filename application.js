@@ -10,7 +10,6 @@ const map = function (input) {
       acc.set(value, 1);
     }
   });
-
   return [...acc];
 };
 

@@ -1,4 +1,4 @@
-const mapreduce = require("./index")();
+const task_mgr = require("./index")();
 const input = require("./data");
 
 const map = function (input) {
@@ -21,6 +21,6 @@ const reduce = function (key, values) {
   return sum;
 };
 
-mapreduce(input, map, reduce, function (result) {
-  console.log(result);
+task_mgr(input, map, reduce, (res) => {
+  console.log(res);
 });
